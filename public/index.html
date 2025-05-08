@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Clerk JWT Test</title>
+    <!-- 👇 Clerk quickstart script tag -->
+    <script
+      async
+      crossorigin="anonymous"
+      data-clerk-publishable-key="pk_test_c2V0LWJhdC00NC5jbGVyay5hY2NvdW50cy5kZXYk"
+      src="https://set-bat-44.clerk.accounts.dev/npm/@clerk/clerk-js@latest/dist/clerk.browser.js"
+      type="text/javascript"
+    ></script>
+  </head>
+  <body>
+    <h2>Sign in to AutoEngage</h2>
+    <button id="sign-in">Sign In</button>
+    <input id="token" type="text"></input>
+
+    <script>
+      window.addEventListener("load", async () => {
+        // initialize the SDK
+        await Clerk.load();  
+        console.log("✅ Clerk loaded");
+
+        // wire up the button
+        document.getElementById("sign-in").addEventListener("click", async () => {
+          console.log("🔘 Sign-in clicked");
+          await Clerk.openSignIn();
+          console.log("🧾 Modal opened");
+          const jwt = await Clerk.session.getToken();
+          console.log("🔑 JWT:", jwt);
+          document.getElementById("token").value = jwt;
+        });
+      });
+    </script>
+  </body>
+</html>

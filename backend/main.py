@@ -1,24 +1,50 @@
-import os
+"""
+FastAPI + Clerk (manual JWT verify) – Windows‑native reference
+"""
+import os, time, json, httpx, asyncio, asyncpg
+from functools import lru_cache
 from dotenv import load_dotenv
-import httpx
+from jose import jwt
+from fastapi import FastAPI, Depends, HTTPException, Query
 
-from fastapi import FastAPI, Depends, HTTPException
-from clerk_backend_api import Clerk
-from clerk_backend_api.jwks_helpers import authenticate_request, AuthenticateRequestOptions
-import asyncpg
+load_dotenv()                                        # .env in backend/
 
-# Load .env into os.environ
-load_dotenv()
+DATABASE_URL      = os.getenv("DATABASE_URL")
+FRONTEND_API      = os.getenv("CLERK_FRONTEND_API")  # e.g. set-bat-44.clerk.accounts.dev
+JWKS_URL          = f"https://{FRONTEND_API}/.well-known/jwks.json"
+ALLOWED_ORIGIN    = "http://localhost:3000"
 
-# Configuration
-DATABASE_URL  = os.getenv("DATABASE_URL")
-CLERK_API_KEY = os.getenv("CLERK_API_KEY")
-
-# Initialize Clerk client
-clerk = Clerk(bearer_auth=CLERK_API_KEY)
-
-# FastAPI app
 app = FastAPI()
+
+# ────────────────────────────────────────────────────────────────────────────────
+#  JWT helpers
+# ────────────────────────────────────────────────────────────────────────────────
+@lru_cache
+def load_jwks():
+    """Fetch Clerk's JWKS once and cache in memory (≈5 keys)."""
+    print("🔑 Fetching Clerk JWKS …")
+    resp = httpx.get(JWKS_URL, timeout=5)
+    resp.raise_for_status()
+    return resp.json()["keys"]
+
+def verify_session_jwt(token: str) -> dict:
+    """Return JWT claims if signature, exp/nbf and azp all check out."""
+    try:
+        claims = jwt.decode(
+            token,
+            load_jwks(),                     # key set
+            algorithms=["RS256"],
+            audience=None,                   # Clerk does not set aud
+            issuer=f"https://{FRONTEND_API}",
+        )
+    except Exception as exc:
+        raise HTTPException(401, f"Invalid Clerk token – {exc}")
+
+    if claims.get("azp") != ALLOWED_ORIGIN:         # Extra defence
+        raise HTTPException(401, "Wrong authorized party")
+
+    return claims
+# ────────────────────────────────────────────────────────────────────────────────
 
 async def get_db():
     conn = await asyncpg.connect(DATABASE_URL)
@@ -28,44 +54,19 @@ async def get_db():
         await conn.close()
 
 @app.get("/healthz")
-async def healthz():
-    return {"status": "ok"}
+def health():
+    return {"ok": True, "ts": time.time()}
 
 @app.post("/auth/callback")
-async def auth_callback(token: str, db=Depends(get_db)):
-    """
-    Verify the Clerk session token, then upsert a tenant record.
-    Frontend should POST the Clerk session token here.
-    """
-    # Construct a fake request object so authenticate_request can run
-    fake_req = httpx.Request(
-        "GET",
-        "http://localhost/auth",
-        headers={"Authorization": f"Bearer {token}"}
-    )
+async def auth_callback(
+    token: str = Query(..., description="Clerk session JWT"),
+    db=Depends(get_db),
+):
+    claims = verify_session_jwt(token)              # <— one‑liner
 
-    # Validate the JWT and fetch payload
-    auth_state = clerk.authenticate_request(
-        fake_req,
-        AuthenticateRequestOptions(
-            # Optionally constrain which frontends/origins can call this
-            authorized_parties=["https://your-frontend.example.com"]
-        )
-    )
-    if not auth_state.is_signed_in:
-        raise HTTPException(status_code=401, detail="Invalid Clerk session token")
-
-    # Extract the Clerk user ID from the verified token
-    user_id = auth_state.payload["sub"]
-
-    # Upsert into tenants table
+    user_id = claims["sub"]
     await db.execute(
-        """
-        INSERT INTO tenants (user_id)
-        VALUES ($1)
-        ON CONFLICT (user_id) DO NOTHING
-        """,
-        user_id
+        "insert into tenants(user_id) values($1) on conflict do nothing",
+        user_id,
     )
-
     return {"user_id": user_id}
