@@ -124,6 +124,16 @@ async def install_page(
         """,
         tenant_id, page_id, access_token
     )
+    # 3) add page_settings row
+    await db.execute(
+    """
+    INSERT INTO page_settings (page_id, auto_reply_enabled)
+    VALUES ($1, TRUE)
+    ON CONFLICT (page_id) DO NOTHING
+    """,
+    page_id,
+)
+
     return {"page_id": page_id}
 
 # ───────────────────────────────────────────

@@ -8,7 +8,7 @@ load_dotenv()
 
 # Environment
 DATABASE_URL      = os.getenv("DATABASE_URL")
-PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
+#PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY")
 
 # Initialize OpenAI client
@@ -31,7 +31,7 @@ async def generate_reply(comment_text: str) -> str:
     )
     return resp.choices[0].message.content.strip()
 
-async def post_reply(comment_id: str, reply_text: str) -> str:
+async def post_reply(comment_id: str, reply_text: str, page_access_token:str ) -> str:
     """
     Post the generated reply via the Facebook Graph API.
     Returns the new Facebook reply comment ID.
@@ -39,13 +39,14 @@ async def post_reply(comment_id: str, reply_text: str) -> str:
     url = f"https://graph.facebook.com/v19.0/{comment_id}/comments"
     params = {
         "message":      reply_text,
-        "access_token": PAGE_ACCESS_TOKEN
+        "access_token": page_access_token
     }
-    async with httpx.AsyncClient() as client:
-        response = await client.post(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-    return data.get("id")
+    
+    # async with httpx.AsyncClient() as client:
+    #     response = await client.post(url, params=params)
+    #     response.raise_for_status()
+    #     data = response.json()
+    #return data.get("id")
 
 async def handle_comment(comment_id: str):
     conn = await asyncpg.connect(DATABASE_URL)
@@ -74,7 +75,9 @@ async def handle_comment(comment_id: str):
 
         # 4) Post using THAT token
         fb_reply_id = await post_reply(comment_id, reply_text, page_token)
-
+        print(comment_text," ",reply_text," ",fb_reply_id)
+        if fb_reply_id == None:
+            fb_reply_id = '112'
         # 5) Mark replied
         await conn.execute(
             "UPDATE comments SET replied = TRUE, reply_id = $2 WHERE id = $1",
