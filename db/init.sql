@@ -32,7 +32,7 @@ CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at);
 -- 3) Comments: threaded replies to posts or to other comments
 CREATE TABLE IF NOT EXISTS comments (
   id          TEXT         PRIMARY KEY,
-  page_id     TEXT         NOT NULL;
+  page_id     TEXT         NOT NULL,
   post_id     TEXT         NOT NULL,    -- which post this comment belongs to
   text        TEXT         NOT NULL,
   platform    TEXT         NOT NULL,    -- 'facebook' or 'instagram'
