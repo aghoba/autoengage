@@ -42,14 +42,12 @@ CREATE TABLE IF NOT EXISTS comments (
   verb        TEXT,                    -- like 'add', 'edited'
   created_at  TIMESTAMPTZ NOT NULL,
   CONSTRAINT fk_comments_post   FOREIGN KEY (post_id)   REFERENCES posts(id),
-  CONSTRAINT fk_comments_parent FOREIGN KEY (parent_id) REFERENCES comments(id)
+  CONSTRAINT fk_comments_parent FOREIGN KEY (parent_id) REFERENCES comments(id),
+  replied   BOOLEAN NOT NULL DEFAULT FALSE,
+  reply_id  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_comments_created_at ON comments(created_at);
 
--- 3b) Track replies
-ALTER TABLE comments
-  ADD COLUMN IF NOT EXISTS replied   BOOLEAN NOT NULL DEFAULT FALSE,
-  ADD COLUMN IF NOT EXISTS reply_id  TEXT;
 
 -- 4) Mentions: when your Page is mentioned in a post or comment
 CREATE TABLE IF NOT EXISTS mentions (
@@ -83,6 +81,13 @@ CREATE TABLE IF NOT EXISTS page_settings (
 );
 
 -- No seed rows here; we’ll INSERT on first webhook
+CREATE TABLE IF NOT EXISTS replies (
+    id          SERIAL       PRIMARY KEY,
+    post_id     TEXT         NOT NULL,
+    reply_text  TEXT         NOT NULL,
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    sent        BOOLEAN      NOT NULL DEFAULT FALSE
+);
 
 
 COMMIT;
