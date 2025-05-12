@@ -9,10 +9,11 @@ CREATE TABLE IF NOT EXISTS tenants (
 );
 
 CREATE TABLE IF NOT EXISTS page_tokens (
-  tenant_id    INTEGER  REFERENCES tenants(id),
-  page_id      TEXT     PRIMARY KEY,
-  access_token TEXT     NOT NULL,
-  installed_at TIMESTAMPTZ DEFAULT now()
+  tenant_id    INTEGER       REFERENCES tenants(id),
+  page_id      TEXT          PRIMARY KEY,
+  access_token TEXT          NOT NULL,
+  page_name    TEXT,                      -- new!
+  installed_at TIMESTAMPTZ  DEFAULT now()
 );
 
 

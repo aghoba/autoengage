@@ -14,6 +14,8 @@ OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY")
 # Initialize OpenAI client
 llm = OpenAI(api_key=OPENAI_API_KEY)
 
+
+
 async def generate_reply(comment_text: str) -> str:
     """
     Use GPT-4o to craft a friendly, on-brand reply in the same language.
@@ -41,8 +43,9 @@ async def post_reply(comment_id: str, reply_text: str, page_access_token:str ) -
         "message":      reply_text,
         "access_token": page_access_token
     }
-    
-    async with httpx.AsyncClient() as client:
+    # e.g. 30 s connect / 60 s read
+    timeout = httpx.Timeout(connect=5.0, read=60.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(url, params=params)
         response.raise_for_status()
         data = response.json()
@@ -60,18 +63,21 @@ async def post_reply(comment_id: str, reply_text: str, page_access_token:str ) -
 async def handle_comment(comment_id: str):
     conn = await asyncpg.connect(DATABASE_URL)
     try:
-        # 1) Fetch comment text and page_id
+        # 1) Load the comment you’re replying to
+        # Fetch comment text, page_id, and user_name
         row = await conn.fetchrow(
-            "SELECT text, page_id FROM comments WHERE id = $1 AND replied = FALSE",
+            "SELECT * FROM comments WHERE id = $1 AND replied = FALSE",
             comment_id
         )
         if not row:
-            print(f"No unreplied comment found for ID {comment_id}")
             return
+        comment_text, page_id, user_id, user_name = row["text"], row["page_id"], row["user_id"], row["user_name"]
+        page_name = await conn.fetchval(
+        "SELECT page_name FROM page_tokens WHERE page_id=$1",
+        page_id
+)
 
-        comment_text, page_id = row["text"], row["page_id"]
-
-        # 2) Get the Page’s access token
+        # Get the Page’s access token
         token_row = await conn.fetchrow(
             "SELECT access_token FROM page_tokens WHERE page_id = $1",
             page_id
@@ -81,34 +87,73 @@ async def handle_comment(comment_id: str):
             return
 
         page_token = token_row["access_token"]
+        # Don’t ever reply to your own Page’s comments
+        if user_id == page_id:
+            return
 
-        # 3) Generate the reply text
-        reply_text = await generate_reply(comment_text)
+        post_id   = row["post_id"]
+        parent_id = row["parent_id"] or row["id"]
 
-        # 4) Insert generated reply into `replies` table
+        # 2) Fetch the entire reply‐thread for this comment using a recursive CTE
+        history = await conn.fetch(
+            """
+            WITH RECURSIVE thread AS (
+              SELECT id, parent_id, post_id, user_id, user_name, text, created_at
+                FROM comments
+               WHERE id = $1
+              UNION ALL
+              SELECT c.id, c.parent_id, c.post_id, c.user_id, c.user_name, c.text, c.created_at
+                FROM comments c
+                JOIN thread t ON c.parent_id = t.id
+            )
+            SELECT *
+              FROM thread
+             WHERE post_id = $2
+             ORDER BY created_at ASC
+            """,
+            parent_id,
+            post_id
+        )
+
+        # 3) Build the OpenAI chat history including author names
+        messages = [{
+                "role": "system",
+                "content": (
+                    f"You are an AI-powered customer support assistant for the “{page_name}” Facebook Page. "
+                    "Your goal is to respond in a friendly, helpful, and concise manner, using the full "
+                    "conversation context to answer users’ questions accurately."
+                )
+            }
+        ]
+
+        for msg in history:
+            author = "Assistant" if msg["user_id"] == page_id else msg["user_name"]
+            role   = "assistant" if msg["user_id"] == page_id else "user"
+            # prefix with name so AI knows who said what
+            messages.append({
+                "role": role,
+                "content": f"{author}: {msg['text']}"
+            })
+
+        # 4) Generate reply using full thread context
+        raw_reply = await generate_reply(messages)
+        #raw_reply = response.choices[0].message.content.strip()
+        print(messages," ",raw_reply)
+        # 5) Prefix the user’s name for clarity
+        reply_text = f"{row['user_name']}, {raw_reply}"
+
+        # 6) Store & send as before…
         await conn.execute(
             "INSERT INTO replies (post_id, reply_text) VALUES ($1, $2)",
             comment_id, reply_text
         )
-
-        # 5) Post reply via Facebook
-        try:
-            fb_reply_id = await post_reply(comment_id, reply_text, page_token)
-        except Exception as e:
-            print(f"Failed to post reply for comment {comment_id}: {e}")
-            return  # Do not mark as replied if posting fails
-        print(comment_text," ",reply_text," ", fb_reply_id)
-        # if fb_reply_id is None:
-        #     print(f"Facebook did not return reply ID for comment {comment_id}, skipping DB update")
-        #     return
-
-        # 6) Mark comment as replied
+        fb_reply_id = await post_reply(comment_id, reply_text, page_token)
+        if not fb_reply_id:
+            return
         await conn.execute(
             "UPDATE comments SET replied = TRUE, reply_id = $2 WHERE id = $1",
             comment_id, fb_reply_id
         )
-
-        print(f"Replied to comment {comment_id}: '{reply_text[:30]}...'")
 
     finally:
         await conn.close()

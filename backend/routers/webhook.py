@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, Request, HTTPException, BackgroundTasks
 from datetime import datetime, timezone
 from backend.db import get_db
-from backend.config import VERIFY_TOKEN, PAGE_ID
+from backend.config import VERIFY_TOKEN
 from services.reply_engine import handle_comment
 
 router = APIRouter()
@@ -29,7 +29,7 @@ async def fb_webhook(
     db=Depends(get_db),
 ):
     payload = await request.json()
-    print("📝 RAW WEBHOOK PAYLOAD:", payload)
+    #print("📝 RAW WEBHOOK PAYLOAD:", payload)
     for entry in payload.get("entry", []):
         page_id = entry["id"]
         print(page_id)
@@ -111,15 +111,17 @@ async def _handle_feed(val, page_id, db, background_tasks, created_at):
 
     # --- New comment
     elif item == "comment":
-        comment_id  = val.get("comment_id")
-        parent_post = val.get("post_id")   # this is the post_id FK
+        comment_id  = val["comment_id"]
+        parent_post = val["post_id"]
         from_info   = val.get("from", {})
+        author_id   = from_info.get("id")
+        author_name = from_info.get("name")
         parent_id   = val.get("parent_id")
         text        = val.get("message")
 
         # 1) Skip empty text
         if not text:
-            print(f"Skipping comment {comment_id} — no text found. {verb} action")
+            print(f"Skipping comment {comment_id} — no text found. ({verb} action)")
             return
 
         # 2) Auto-insert stub post if missing
@@ -167,34 +169,51 @@ async def _handle_feed(val, page_id, db, background_tasks, created_at):
             text,
             "facebook",
             parent_id,
-            from_info["id"],
-            from_info["name"],
+            author_id,
+            author_name,
             val.get("verb"),
             created_at,
         )
 
         # 5) Queue auto-reply if needed
-        if parent_id is None and from_info.get("id") != PAGE_ID:
+        # new: schedule for any comment not authored by the Page itself
+        print(author_id," ",page_id)
+        if author_id != page_id:
             background_tasks.add_task(handle_comment, comment_id)
 
 
 
+
 async def _handle_mention(val, created_at, db):
-    mention_id = f"mention-{val.get('post_id')}-{val.get('sender_id')}-{val.get('created_time')}"
+    # 1) pull the actor from the payload
+    from_info  = val.get("from", {})
+    sender_id   = from_info.get("id")
+    sender_name = from_info.get("name")
+
+    # 2) skip if we lack sender info
+    if not sender_id or not sender_name:
+        print(f"Skipping mention—no sender info: {val}")
+        return
+
+    # 3) build your mention_id however you like
+    mention_id = f"mention-{val.get('post_id')}-{sender_id}-{created_at.timestamp()}"
+
+    # 4) now insert safely
     await db.execute(
         """
         INSERT INTO mentions (
-            id, post_id, sender_id, sender_name, verb, created_at
+          id, post_id, sender_id, sender_name, verb, created_at
         ) VALUES ($1,$2,$3,$4,$5,$6)
         ON CONFLICT DO NOTHING
         """,
         mention_id,
         val.get("post_id"),
-        val.get("sender_id"),
-        val.get("sender_name"),
+        sender_id,
+        sender_name,
         val.get("verb"),
         created_at,
     )
+
 
 
 async def _handle_message(val, created_at, db):

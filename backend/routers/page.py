@@ -1,4 +1,5 @@
 # routers/page.py: page install route
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from backend.routers.auth import verify_session_jwt
 from backend.db import get_db
@@ -21,13 +22,22 @@ async def install_page(
         raise HTTPException(404, "Tenant not found")
     tenant_id = tenant_row["id"]
 
+        # 1) Fetch the Page’s name
+    url = f"https://graph.facebook.com/v22.0/{page_id}"
+    params = {"fields": "name", "access_token": access_token}
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, params=params)
+        resp.raise_for_status()
+        page_info = resp.json()
+    page_name = page_info.get("name")
+    print("Welcome ",page_name)
     await db.execute(
         """
-        INSERT INTO page_tokens (tenant_id,page_id,access_token)
-        VALUES ($1,$2,$3)
+        INSERT INTO page_tokens (tenant_id,page_id,access_token,page_name)
+        VALUES ($1,$2,$3,$4)
         ON CONFLICT (page_id) DO UPDATE SET access_token = EXCLUDED.access_token
         """,
-        tenant_id, page_id, access_token
+        tenant_id, page_id, access_token, page_name
     )
     await db.execute(
         """
@@ -37,4 +47,5 @@ async def install_page(
         """,
         page_id,
     )
-    return {"page_id": page_id}
+    # (rest of your response)
+    return {"page_id": page_id, "page_name": page_name}
