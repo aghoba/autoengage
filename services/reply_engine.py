@@ -21,8 +21,8 @@ async def generate_reply(comment_text: str) -> str:
     Use GPT-4o to craft a friendly, on-brand reply in the same language.
     """
     prompt = (
-        f"Brand-tone: friendly and helpful.\n"
-        f"Reply to this customer comment in the same language:\n\n\"{comment_text}\""
+        f"Brand-tone: Neutral.\n"
+        f"Reply to this customer comment in the same language (Either English or Egyptian Arabic):\n\n\"{comment_text}\""
     )
     resp = llm.chat.completions.create(
         model="gpt-4.1-nano",
@@ -44,7 +44,7 @@ async def post_reply(comment_id: str, reply_text: str, page_access_token:str ) -
         "access_token": page_access_token
     }
     # e.g. 30 s connect / 60 s read
-    timeout = httpx.Timeout(connect=5.0, read=60.0)
+    timeout = httpx.Timeout(timeout=60.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(url, params=params)
         response.raise_for_status()
@@ -66,8 +66,14 @@ async def handle_comment(comment_id: str):
         # 1) Load the comment you’re replying to
         # Fetch comment text, page_id, and user_name
         row = await conn.fetchrow(
-            "SELECT * FROM comments WHERE id = $1 AND replied = FALSE",
-            comment_id
+        """
+        SELECT *
+          FROM comments
+         WHERE id = $1
+           AND replied = FALSE
+           AND status = 'approved'
+        """,
+        comment_id
         )
         if not row:
             return
@@ -75,7 +81,7 @@ async def handle_comment(comment_id: str):
         page_name = await conn.fetchval(
         "SELECT page_name FROM page_tokens WHERE page_id=$1",
         page_id
-)
+        )
 
         # Get the Page’s access token
         token_row = await conn.fetchrow(
@@ -122,6 +128,7 @@ async def handle_comment(comment_id: str):
                     f"You are an AI-powered customer support assistant for the “{page_name}” Facebook Page. "
                     "Your goal is to respond in a friendly, helpful, and concise manner, using the full "
                     "conversation context to answer users’ questions accurately."
+                    "Reply to this customer comment in the same language (Either English or Egyptian Arabic):"
                 )
             }
         ]
@@ -157,6 +164,27 @@ async def handle_comment(comment_id: str):
 
     finally:
         await conn.close()
+
+
+async def classify_sentiment(text: str) -> str:
+    """
+    Uses OpenAI to label text as 'positive', 'neutral', or 'negative'.
+    """
+    prompt = (
+        "Classify the sentiment of this user comment into one of: "
+        "positive, neutral, negative.\n\n"
+        f"Comment: \"{text}\""
+    )
+    resp = llm.chat.completions.create(
+        model="gpt-4.1-nano",
+        messages=[
+            {"role": "system", "content": "You are an expert sentiment analyzer."},
+            {"role": "user",   "content": prompt},
+        ],
+    )
+    label = resp.choices[0].message.content.strip().lower()
+    # normalize answers
+    return {"positive": "positive", "neutral": "neutral", "negative": "negative"}.get(label, "neutral")
 
 
 # Optional: CLI worker entrypoint

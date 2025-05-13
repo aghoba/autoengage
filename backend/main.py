@@ -1,6 +1,6 @@
 # main.py: bring it all together
 from fastapi import FastAPI
-from backend.routers import auth, page, webhook
+from backend.routers import auth, page, webhook, review
 from fastapi.middleware.cors import CORSMiddleware
 from backend.config   import JWKS_URL, FRONTEND_API, ALLOWED_ORIGIN
 
@@ -15,3 +15,4 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(page.router)
 app.include_router(webhook.router)
+app.include_router(review.router)

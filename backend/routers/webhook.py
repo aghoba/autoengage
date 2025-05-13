@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Request, HTTPException, BackgroundTasks
 from datetime import datetime, timezone
 from backend.db import get_db
 from backend.config import VERIFY_TOKEN
-from services.reply_engine import handle_comment
+from services.reply_engine import handle_comment, classify_sentiment
 
 router = APIRouter()
 
@@ -49,8 +49,8 @@ async def fb_webhook(
             "SELECT auto_reply_enabled FROM page_settings WHERE page_id = $1",
             page_id
         )
-        if not enabled:
-            continue  # auto-reply is turned off for this Page
+        # if not enabled:
+        #     continue  # auto-reply is turned off for this Page
 
         for change in entry.get("changes", []):
             field = change.get("field")
@@ -118,7 +118,7 @@ async def _handle_feed(val, page_id, db, background_tasks, created_at):
         author_name = from_info.get("name")
         parent_id   = val.get("parent_id")
         text        = val.get("message")
-
+        # print(comment_id," ",parent_post," ",from_info," ",author_id," ",author_name," ",parent_id," ",text)
         # 1) Skip empty text
         if not text:
             print(f"Skipping comment {comment_id} — no text found. ({verb} action)")
@@ -154,13 +154,41 @@ async def _handle_feed(val, page_id, db, background_tasks, created_at):
             if not parent_exists:
                 parent_id = None
 
+        # 1) classify sentiment
+        sentiment = await classify_sentiment(text)
+        # 3) auto-approve any comments authored by the Page itself
+        if author_id == page_id:
+            status = 'approved'
+        else:
+            # 2) fetch page’s auto-reply settings
+            enabled = await db.fetchrow(
+                "SELECT auto_reply_enabled, auto_reply_negative FROM page_settings WHERE page_id=$1",
+                page_id
+            )
+            if enabled:
+                auto_reply_enabled, auto_reply_negative  = enabled
+                #= enabled["auto_reply_negative"]
+            else:
+                # default fallback if page_settings missing
+                auto_reply_enabled, auto_reply_negative = True, False
+            
+            # 3) determine status: use auto_reply_negative if sentiment is 'negative'
+            if not auto_reply_enabled:
+                status = 'pending_review'
+            elif sentiment == 'negative' and not auto_reply_negative:
+                status = 'pending_review'
+            else:
+                status = 'approved'
+        print(f"Comment {comment_id} sentiment: {sentiment} Status: {status}")
+        
         # 4) Insert the comment
         await db.execute(
             """
             INSERT INTO comments (
               id, page_id, post_id, text, platform,
-              parent_id, user_id, user_name, verb, created_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+              parent_id, user_id, user_name, verb, created_at,
+            sentiment, status
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
             ON CONFLICT DO NOTHING
             """,
             comment_id,
@@ -172,13 +200,16 @@ async def _handle_feed(val, page_id, db, background_tasks, created_at):
             author_id,
             author_name,
             val.get("verb"),
-            created_at,
+            created_at, 
+            sentiment, 
+            status
         )
-
+        # after you’ve inserted the comment into DB
+        
         # 5) Queue auto-reply if needed
         # new: schedule for any comment not authored by the Page itself
         print(author_id," ",page_id)
-        if author_id != page_id:
+        if author_id != page_id and status == 'approved':
             background_tasks.add_task(handle_comment, comment_id)
 
 

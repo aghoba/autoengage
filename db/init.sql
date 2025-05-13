@@ -36,16 +36,18 @@ CREATE TABLE IF NOT EXISTS comments (
   page_id     TEXT         NOT NULL,
   post_id     TEXT         NOT NULL,    -- which post this comment belongs to
   text        TEXT         NOT NULL,
-  platform    TEXT         NOT NULL,    -- 'facebook' or 'instagram'
+  platform    TEXT         NOT NULL,    -- 'facebook', 'instagram', etc.
   parent_id   TEXT,                    -- reply to another comment
   user_id     TEXT,                    -- commenter’s ID
   user_name   TEXT,                    -- commenter’s name
   verb        TEXT,                    -- like 'add', 'edited'
   created_at  TIMESTAMPTZ NOT NULL,
+  sentiment   TEXT,                    -- 'positive', 'neutral', or 'negative'
+  replied     BOOLEAN     NOT NULL DEFAULT FALSE,
+  reply_id    TEXT,
+  status      TEXT NOT NULL DEFAULT 'new',   -- 'new', 'approved', 'pending_review', 'rejected'
   CONSTRAINT fk_comments_post   FOREIGN KEY (post_id)   REFERENCES posts(id),
-  CONSTRAINT fk_comments_parent FOREIGN KEY (parent_id) REFERENCES comments(id),
-  replied   BOOLEAN NOT NULL DEFAULT FALSE,
-  reply_id  TEXT
+  CONSTRAINT fk_comments_parent FOREIGN KEY (parent_id) REFERENCES comments(id)
 );
 CREATE INDEX IF NOT EXISTS idx_comments_created_at ON comments(created_at);
 
@@ -78,7 +80,8 @@ CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
 -- 6) Per-Page settings (one row per Page ID)
 CREATE TABLE IF NOT EXISTS page_settings (
   page_id            TEXT    PRIMARY KEY,       -- e.g. “373583083509912”
-  auto_reply_enabled BOOLEAN NOT NULL DEFAULT TRUE
+  auto_reply_enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+  auto_reply_negative    BOOLEAN NOT NULL DEFAULT FALSE  -- allow auto-reply for negative comments
 );
 
 -- No seed rows here; we’ll INSERT on first webhook
